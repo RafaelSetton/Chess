@@ -157,13 +157,15 @@ class Xadrez(Tabuleiro):
             'BC': True,
         }
         self.__passant = []
+        self.__promote_counter = 0
 
         # Pygame
         self.running = True
         self.__previous = [['' for _ in range(8)] for _ in range(8)]
         self.__marked = None
 
-        self.screen: pg.Surface = pg.display.set_mode((800, 800))
+        self.screen_size = 800
+        self.screen: pg.Surface = pg.display.set_mode((self.screen_size, self.screen_size))
         self.imgs = {
             True: {name: pg.transform.scale(pg.image.load(f'./assets/Preto/{name}.png'), (100, 100))
                    for name in ['p', 'b', 't', 'c', 're', 'ra']},
@@ -194,7 +196,7 @@ class Xadrez(Tabuleiro):
             'ra': Pecas.Rainha,
         }
 
-        peca = _peca.lower().rstrip('12345678')
+        peca = _peca.lower().rstrip('+12345678')
         x1, y1 = origem
         x2, y2 = destino
         if peca == 'c':
@@ -268,9 +270,8 @@ class Xadrez(Tabuleiro):
 
     def __text(self, text, color=(0, 0, 0)):
         img = pg.font.SysFont('Agency FB', 95, True).render(text, True, color)
-        w, h = self.screen.get_size()
         img_w, img_h = img.get_size()
-        self.screen.blit(img, ((w - img_w)//2, (h-img_h)//2))
+        self.screen.blit(img, ((self.screen_size - img_w)//2, (self.screen_size - img_h)//2))
         pg.display.update()
         self.__wait_for_click()
         self.blit(True)
@@ -304,6 +305,11 @@ class Xadrez(Tabuleiro):
             self.__roque['BC'] = False
         if peca in ('re', 't2'):
             self.__roque['BL'] = False
+        if peca.lower()[0] == 'p' and destino[0] in (0, 7):
+            new = self.__promote(self.__cor(origem))
+            self.__promote_counter += 1
+            self.set_casa(destino, f'{new}+{self.__promote_counter}')
+
         self.vez = 'P' if self.vez == 'B' else 'B'
         return True
 
@@ -400,7 +406,8 @@ class Xadrez(Tabuleiro):
         for y, line in enumerate(self.tabuleiro):
             for x, peca in enumerate(line):
                 if peca != self.empty:
-                    self.screen.blit(self.imgs[peca.isupper()][peca.lower().rstrip('12345678')], (x*100, y*100))
+                    img = self.imgs[peca.isupper()][peca.lower().rstrip('+12345678')]
+                    self.screen.blit(img, (x*100, y*100))
         self.__previous = deepcopy(self.tabuleiro)
 
     def __mark(self, x, y):
@@ -421,7 +428,7 @@ class Xadrez(Tabuleiro):
 
         _peca = self.casa(y, x)
         branca = _peca.islower()
-        peca = _peca.lower().rstrip('12345678')
+        peca = _peca.lower().rstrip('+12345678')
         if peca == 'p':
             obj = Pecas.Peao(y, x, (0.5 - int(branca)) * 2)
         elif peca == self.empty:
@@ -455,13 +462,29 @@ class Xadrez(Tabuleiro):
         pg.draw.rect(self.screen, color, ((x * 100 + 1, y * 100 + 1), (98, 98)))
 
     def __wait_for_click(self):
-        running = True
-        while running and self.running:
+        while self.running:
             for evt in pg.event.get():
                 if evt.type == pg.QUIT:
                     self.running = False
                 elif evt.type == pg.MOUSEBUTTONDOWN:
-                    running = False
+                    return evt.pos
+
+    def __promote(self, color):
+        self.screen.fill((255, 255, 255))
+        pg.draw.rect(self.screen, (0, 0, 0), ((0, self.screen_size // 2 - 1), (self.screen_size, 2)))
+        pg.draw.rect(self.screen, (0, 0, 0), ((self.screen_size // 2 - 1, 0), (2, self.screen_size)))
+        possibs = ['ra', 'c', 'b', 't']
+        for i, peca in enumerate(possibs):
+            img = pg.transform.scale(self.imgs[color == 'P'][peca], (self.screen_size // 8, self.screen_size // 8))
+            self.screen.blit(img, (
+                (i // 2) * (self.screen_size // 2) + 3 * self.screen_size // 16,
+                (i % 2) * (self.screen_size // 2) + 3 * self.screen_size // 16))
+        pg.display.update()
+        try:
+            x, y = self.__wait_for_click()
+        except TypeError:
+            return
+        return possibs[(x * 2) // self.screen_size * 2 + (y * 2) // self.screen_size]
 
     def event_listener(self):
         for evt in pg.event.get():
@@ -486,7 +509,6 @@ class Xadrez(Tabuleiro):
 
 
 # TODO:
-# Promoção de Peão
 # Mostar apenas movimentos que não colocam o Rei em cheque
 # Mate
 
