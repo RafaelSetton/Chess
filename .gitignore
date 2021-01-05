@@ -1,3 +1,5 @@
+venv/
+.idea/
 build/
 __pycache__/
 setup.py

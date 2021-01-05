@@ -1,7 +1,13 @@
 class Peca:
-    def __init__(self, x, y):
+    def __init__(self, x, y, cor):
         self.x = x
         self.y = y
+        self.cor = cor
+        self.moved = False
+
+    @property
+    def pos(self):
+        return [self.x, self.y]
 
     def validate(self, destino, comer=False):
         return tuple(destino) in self.possiveis(comer)
@@ -9,19 +15,28 @@ class Peca:
     def possiveis(self, comer=False):
         raise NotImplementedError
 
+    def move(self, x, y):
+        self.x = x
+        self.y = y
+        self.moved = True
+
+    def __copy__(self):
+        new = self.__class__(0, 0, '')
+        new.__dict__.update(self.__dict__)
+        return new
+
 
 class Peao(Peca):
-    def __init__(self, x, y, orientacao):
-        super().__init__(x, y)
-        self.orien = int(orientacao)
-        self.line = 1 if self.orien == 1 else 6
+    def __init__(self, x, y, cor):
+        super().__init__(x, y, cor)
+        self.orien = 1 if cor == 'P' else -1
 
     def possiveis(self, comer=False):
         res = [(self.x + self.orien, self.y + 1), (self.x + self.orien, self.y - 1)] if comer else []
-        if self.x == self.line:
+        if not self.moved:
             res += [(self.x + self.orien*2, self.y), (self.x + self.orien, self.y)]
         else:
-            res += [(self.x + self.orien, self.y)] if 0 <= self.x + self.orien < 8 else []
+            res += [(self.x + self.orien, self.y)]
         return [coord for coord in res if 0 <= coord[0] < 8 and 0 <= coord[1] < 8]
 
 
@@ -51,4 +66,4 @@ class Rei(Peca):
 
 class Rainha(Peca):
     def possiveis(self, comer=False):
-        return Torre(self.x, self.y).possiveis() + Bispo(self.x, self.y).possiveis()
+        return Torre(self.x, self.y, self.cor).possiveis() + Bispo(self.x, self.y, self.cor).possiveis()

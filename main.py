@@ -1,452 +1,333 @@
-from multipledispatch import dispatch
-from copy import deepcopy
 import pygame as pg
-from time import sleep
-Pecas = __import__('pecas')
+from pygame.time import Clock
+from pecas import *
+
 pg.init()
 
 
-class Tabuleiro:
-    def __init__(self, tabuleiro):
-        """
-        Cria um tabuleiro com diversas características para realizar operações
-        :param tabuleiro: Uma série de iteráveis de mesmo tamanho, que formam as linhas de um tabuleiro retângular.
-        """
-        self.__tabuleiro = list(tabuleiro)
-        self.largura = len(self.__tabuleiro[0])
-        for line in self.__tabuleiro:
-            line = list(line)
-            if len(line) != self.largura:
-                raise ValueError('Todas as linhas devem ter o mesmo tamanho.')
-        self.altura = len(self.__tabuleiro)
-        self.casas = self.altura * self.largura
-
-    def __repr__(self):
-        return self.__tabuleiro
-
-    def __str__(self):
-        return '\n'.join([' '.join(line) for line in self.__tabuleiro])
-
-    @property
-    def tabuleiro(self):
-        return self.__tabuleiro
-
-    @property
-    def bordas(self):
-        bordas = dict()
-        bordas['D'], bordas['U'] = self.__tabuleiro[-1:0].copy()
-        bordas['R'], bordas['L'] = self.rot()[-1:0].copy()
-        return bordas
-
-    @dispatch(list)
-    def casa(self, coordenada):
-        """
-        Retorna o valor da casa com linha e coluna informadas
-        :param coordenada: Um iterável de tamanho 2, que representa o índice da linha e da coluna, respectivamente.
-        :return: Valor da casa determinada
-        """
-        return self.__tabuleiro[coordenada[0]][coordenada[1]]
-
-    @dispatch(int, int)
-    def casa(self, x, y):
-        """
-        Retorna o valor da casa com linha e coluna informadas
-        :param x: O índice da linha
-        :param y: O índice da coluna
-        :return: Valor da casa determinada
-        """
-        return self.__tabuleiro[x][y]
-
-    @dispatch(list, object)
-    def set_casa(self, coordenada, value):
-        ret = self.casa(coordenada)
-        self.__tabuleiro[coordenada[0]][coordenada[1]] = value
-        return ret
-
-    @dispatch(int, int, object)
-    def set_casa(self, x, y, value):
-        ret = self.casa(x, y)
-        self.__tabuleiro[x][y] = value
-        return ret
-
-    def rot(self):
-        return [[line[i] for line in self.__tabuleiro] for i in range(self.largura)[::-1]]
-
-    def diag(self, offset=0, axis=1):
-        if axis == 1:
-            tab = self.tabuleiro
-        elif axis == -1:
-            tab = self.rot()
-        else:
-            raise ValueError("Axis deve ser 1 ou -1")
-        x = max(0, -offset)
-        y = max(0, offset)
-        while True:
-            try:
-                yield tab[x][y]
-            except IndexError:
-                break
-            else:
-                x += 1
-                y += 1
-                if not (0 <= x < 8 and 0 <= y < 8):
-                    break
-
-    def encontra(self, value, todos=False):
-        """
-        Retorna a localização do valor informdao
-        :param value: O valor que será buscado
-        :param todos: Define se todas as ocorrências serão retornadas (True), ou se somente a primeira (False)
-        :return: Retorna a primeira ou todas as ocorrências do determinado valor no formato de tupla: (linha, coluna)
-        """
-
-        def traduz(n):
-            return n // self.largura, n % self.largura
-
-        one_line = sum(self.__tabuleiro, [])
-        inds = [one_line.index(value)]
-        if todos:
-            while value in one_line[inds[-1] + 1:]:
-                inds.append(one_line.index(value, inds[-1] + 1))
-            return [traduz(ind) for ind in inds]
-        return traduz(inds[0])
-
-    def linha(self, numero_da_linha: int):
-        """
-        :param numero_da_linha: O número da linha a ser retornada
-        :return: A linha de número :numero_da_linha:
-        """
-        return self.__tabuleiro[numero_da_linha]
-
-    def coluna(self, numero_da_coluna: int):
-        """
-        :param numero_da_coluna: O número da coluna a ser retornada
-        :return: A coluna de número :numero_da_linha:
-        """
-        return self.rot()[7-numero_da_coluna]
-
-    def troca_casas(self, casa_1, casa_2):
-        """
-        Inverte os valores nas duas casas informadas
-        :param casa_1: Coordenada na forma: (linha, coluna) da primeira casa
-        :param casa_2: Coordenada na forma: (linha, coluna) da segunda casa
-        """
-        v1 = self.casa(list(casa_1))
-        v2 = self.set_casa(list(casa_2), v1)
-        self.set_casa(list(casa_1), v2)
-        return v1, v2
-
-
-class Xadrez(Tabuleiro):
-    def __init__(self, empty='XX', configuracao_inicial=None):
-        if not empty:
-            self.empty = 'XX'
-        elif len(empty) == 1:
-            self.empty = empty * 2
-        else:
-            self.empty = empty[:2]
-        if configuracao_inicial is None:
-            configuracao_inicial = self.__criar()
-        super().__init__(configuracao_inicial)
+class Xadrez:
+    def __init__(self, configuracao_inicial=None):
+        self.tabuleiro = configuracao_inicial or self.__criar()
         self.__comidas = {'B': [], 'P': []}
         self.vez = 'B'
-        self.__roque = {
-            'PL': True,
-            'PC': True,
-            'BL': True,
-            'BC': True,
-        }
         self.__passant = []
-        self.__promote_counter = 0
 
         # Pygame
         self.running = True
-        self.__previous = [['' for _ in range(8)] for _ in range(8)]
+        self.__previous = []
         self.__marked = None
 
         self.screen_size = 800
-        self.screen: pg.Surface = pg.display.set_mode((self.screen_size, self.screen_size))
-        self.imgs = {
-            True: {name: pg.transform.scale(pg.image.load(f'./assets/Preto/{name}.png'), (100, 100))
-                   for name in ['p', 'b', 't', 'c', 're', 'ra']},
-            False: {name: pg.transform.scale(pg.image.load(f'./assets/Branco/{name}.png'), (100, 100))
-                    for name in ['p', 'b', 't', 'c', 're', 'ra']}
-        }
+        self.screen = None
+        self.imgs = None
 
-    def __criar(self):
-        l1 = ['T1', 'C1', 'B1', 'RE', 'RA', 'B2', 'C2', 'T2']
-        l2 = [f'P{x}' for x in range(1, 9)]
-        l3a6 = [self.empty for _ in range(8)]
-        l7 = [x.lower() for x in l2]
-        l8 = [x.lower() for x in l1]
-        return [l1, l2] + [l3a6.copy() for _ in range(4)] + [l7, l8]
+    def __repr__(self):
+        return [(p.__class.__name__, p.pos) for p in self.tabuleiro]
 
-    def __cor(self, casa):
-        if self.casa(casa) == self.empty:
-            return None
-        return 'P' if self.casa(casa).isupper() else 'B'
+    def __str__(self):
+        return '\n'.join([' '.join(line) for line in self.tabuleiro])
 
-    def __validate_move(self, origem, destino, _peca: str, vez, comer=False):
-        classe = {
-            'p': lambda a, b: Pecas.Peao(a, b, 1) if vez == 'P' else Pecas.Peao(a, b, -1),
-            'b': Pecas.Bispo,
-            't': Pecas.Torre,
-            'c': Pecas.Cavalo,
-            're': Pecas.Rei,
-            'ra': Pecas.Rainha,
-        }
+    @staticmethod
+    def __criar():
+        return [Torre(0, 0, 'P'), Cavalo(0, 1, 'P'), Bispo(0, 2, 'P'), Rei(0, 3, 'P'),
+                Rainha(0, 4, 'P'), Bispo(0, 5, 'P'), Cavalo(0, 6, 'P'), Torre(0, 7, 'P'),
+                Peao(1, 0, 'P'), Peao(1, 1, 'P'), Peao(1, 2, 'P'), Peao(1, 3, 'P'),
+                Peao(1, 4, 'P'), Peao(1, 5, 'P'), Peao(1, 6, 'P'), Peao(1, 7, 'P'),
 
-        peca = _peca.lower().rstrip('+12345678')
+                Peao(6, 0, 'B'), Peao(6, 1, 'B'), Peao(6, 2, 'B'), Peao(6, 3, 'B'),
+                Peao(6, 4, 'B'), Peao(6, 5, 'B'), Peao(6, 6, 'B'), Peao(6, 7, 'B'),
+                Torre(7, 0, 'B'), Cavalo(7, 1, 'B'), Bispo(7, 2, 'B'), Rei(7, 3, 'B'),
+                Rainha(7, 4, 'B'), Bispo(7, 5, 'B'), Cavalo(7, 6, 'B'), Torre(7, 7, 'B')
+                ]
+
+    def copy(self):
+        return [peca.__copy__() for peca in self.tabuleiro]
+
+    # Getters
+
+    def cor(self, casa):
+        peca = self.casa(casa)
+        if peca:
+            return peca.cor
+
+    def casa(self, coords):
+        for p in self.tabuleiro:
+            if p.pos == list(coords):
+                return p
+
+    def coluna(self, n):
+        col = [None]*8
+        for p in self.tabuleiro:
+            if p.y == n:
+                col[p.x] = p
+        return col
+
+    def linha(self, n):
+        col = [None]*8
+        for p in self.tabuleiro:
+            if p.x == n:
+                col[p.y] = p
+        return col
+
+    def diag(self, offset=0, axis=1):
+        if axis == 1:
+            x = max(0, -offset)
+            y = max(0, offset)
+            while x < 8 and y < 8:
+                yield self.casa([x, y])
+                x += 1
+                y += 1
+        else:
+            x = max(0, offset)
+            y = min(7, 7+offset)
+            while x < 8 and y >= 0:
+                yield self.casa([x, y])
+                x += 1
+                y -= 1
+
+    @property
+    def brancas(self):
+        return [peca for peca in self.tabuleiro if peca.cor == 'B']
+
+    @property
+    def pretas(self):
+        return [peca for peca in self.tabuleiro if peca.cor == 'P']
+
+    def rei(self, cor) -> Rei:
+        r1, r2 = list(filter(Rei.__instancecheck__, self.tabuleiro))
+        return r1 if r1.cor == cor else r2
+
+    @staticmethod
+    def inv_cor(cor):
+        return 'P' if cor == 'B' else 'B'
+
+    # Outros
+
+    def __validate_move(self, origem, destino, vez):
+        peca = self.casa(origem)
+        outra = self.casa(destino)
+        comer = bool(outra)
         x1, y1 = origem
         x2, y2 = destino
-        if peca == 'c':
-            path = [self.empty]
+        if isinstance(peca, Cavalo):
+            path = []
         elif x1 == x2:
             beg = min(y1, y2)
             end = y1 + y2 - beg
-            path = self.coluna(x1)[beg+1:end]
+            path = self.linha(x1)[beg + 1:end]
         elif y1 == y2:
             beg = min(x1, x2)
             end = x1 + x2 - beg
-            path = self.linha(y1)[beg + 1:end]
+            path = self.coluna(y1)[beg + 1:end]
         else:
             dx = x2 - x1
             dy = y2 - y1
             if dx == dy:
-                offset = x1 - y1
+                offset = y1 - x1
                 path = list(self.diag(offset))
-                i1 = origem[0] - max(offset, 0)
-                i2 = destino[0] - max(offset, 0)
+                i1 = origem[1] - max(offset, 0)
+                i2 = destino[1] - max(offset, 0)
             else:  # dx == -dy
                 offset = x1 + y1 - 7
-                path = list(self.diag(offset, -1))
+                path = list(self.diag(offset, -1))[::-1]
                 i1 = origem[1] - max(offset, 0)
                 i2 = destino[1] - max(offset, 0)
             beg = min(i1, i2)
             end = i1 + i2 - beg
-            path = path[beg+1:end]
+            path = path[beg + 1:end]
 
-        if len(set(path)) > 1 or (path and self.empty not in path) or self.__cor([y2, x2]) == vez:
+        if len(set(path)) > 1 or (path and None not in path) or self.cor(destino) == vez or self.cor(origem) != vez:
             return False
 
-        valido = classe[peca](y1, x1).validate(destino[::-1], comer)
-        if valido and peca == 're':
-            delta = x2 - x1
-            if abs(delta) == 2:
-                if _peca == 're':
-                    if delta == 2 and self.__roque['BL']:
-                        path = self.tabuleiro[7][4:7]
-                    elif delta == -2 and self.__roque['BC']:
-                        path = self.tabuleiro[7][1:3]
-                    else:
+        valido = peca.validate(destino, comer)
+        if valido:
+            delta = y2 - y1
+            if isinstance(peca, Rei):
+                if abs(delta) == 2 and not peca.moved:
+                    if peca.cor == 'B':
+                        if delta == 2 and not self.casa([7, 7]).moved:
+                            path = self.linha(7)[4:7]
+                        elif delta == -2 and not self.casa([7, 0]).moved:
+                            path = self.linha(7)[1:3]
+                        else:
+                            return False
+                        if len(set(path)) == 1 and None in path:
+                            return 'roque'
                         return False
-                    if len(set(path)) == 1 and path[0] == self.empty:
-                        self.__roque['BL'] = False
-                        self.__roque['BC'] = False
-                        return 'roque'
-                    return False
-                elif _peca == 'RE':
-                    if delta == 2 and self.__roque['PL']:
-                        path = self.tabuleiro[0][4:7]
-                    elif delta == -2 and self.__roque['PC']:
-                        path = self.tabuleiro[0][1:3]
                     else:
+                        if delta == 2 and not self.casa([0, 7]).moved:
+                            path = self.linha(0)[4:7]
+                        elif delta == -2 and not self.casa([0, 0]).moved:
+                            path = self.linha(0)[1:3]
+                        else:
+                            return False
+                        if len(set(path)) == 1 and None in path:
+                            return 'roque'
                         return False
-                    if len(set(path)) == 1 and path[0] == self.empty:
-                        self.__roque['PL'] = False
-                        self.__roque['PC'] = False
-                        return 'roque'
+            elif isinstance(peca, Peao):
+                if delta == 0 and comer:
                     return False
-
-                return 'roque' if len(set(path)) == 1 and path[0] == self.empty else False
 
         return valido
-
-    def __brancas(self):
-        return [peca for peca in sum(self.tabuleiro, []) if peca.islower() and peca != self.empty]
-
-    def __pretas(self):
-        return [peca for peca in sum(self.tabuleiro, []) if peca.isupper() and peca != self.empty]
-
-    def __text(self, text, color=(0, 0, 0)):
-        img = pg.font.SysFont('Agency FB', 95, True).render(text, True, color)
-        img_w, img_h = img.get_size()
-        self.screen.blit(img, ((self.screen_size - img_w)//2, (self.screen_size - img_h)//2))
-        pg.display.update()
-        self.__wait_for_click()
-        self.blit(True)
 
     def __move(self, origem, destino):
         self.__passant = []
         peca = self.casa(origem)
-        comer = self.casa(destino)
-        if self.__cor(origem) != self.vez:
+        outra = self.casa(destino)
+        if self.cor(origem) != self.vez:
             self.__text("Não é sua vez")
             return False
 
-        if comer != self.empty:
-            self.__comidas[self.vez].append(comer)
-        if peca.lower() == 're' and abs(origem[1] - destino[1]) == 2:
-            cor = self.__cor(origem)
+        if outra is not None:  # Handle Comer
+            self.__comidas[self.vez].append(outra)
+            self.tabuleiro.remove(outra)
+
+        if isinstance(peca, Rei) and abs(origem[1] - destino[1]) == 2:  # Roque
+            cor = self.cor(origem)
             modo = 'L' if destino[1] > origem[1] else 'C'
             self.__move_roque(cor + modo)
-        elif peca.lower()[0] == 'p' and abs(origem[1] - destino[1]) == 1 and comer == self.empty:
+        elif isinstance(peca, Peao) and abs(origem[1] - destino[1]) == 1 and outra is None:  # Passant
             self.__comer_passant(origem, destino)
-        else:
-            self.set_casa(origem, self.empty)
-            self.set_casa(destino, peca)
-            if peca.lower()[0] == 'p' and abs(destino[0] - origem[0]) == 2:
+        else:  # Movimento normal
+            peca.move(*destino)
+            if isinstance(peca, Peao) and abs(destino[0] - origem[0]) == 2:
                 self.__passant.append(peca)
-        if peca in ('RE', 'T1'):
-            self.__roque['PC'] = False
-        if peca in ('RE', 'T2'):
-            self.__roque['PL'] = False
-        if peca in ('re', 't1'):
-            self.__roque['BC'] = False
-        if peca in ('re', 't2'):
-            self.__roque['BL'] = False
-        if peca.lower()[0] == 'p' and destino[0] in (0, 7):
-            new = self.__promote(self.__cor(origem))
-            self.__promote_counter += 1
-            self.set_casa(destino, f'{new}+{self.__promote_counter}')
 
-        self.vez = 'P' if self.vez == 'B' else 'B'
+        if isinstance(peca, Peao) and destino[0] in (0, 7):
+            new = self.__promote(self.cor(origem))
+            classe = {
+                'Rainha': Rainha,
+                'Bispo': Bispo,
+                'Cavalo': Cavalo,
+                'Torre': Torre,
+            }
+            self.tabuleiro.append(classe[new](*destino, self.cor(origem)))
+            self.tabuleiro.remove(peca)
+
+        if self.screen:
+            if self.__is_check(self.vez):
+                print("Cheque")
+            if self.__is_mate(self.vez):
+                print("Mate")
+
+        self.vez = self.inv_cor(self.vez)
         return True
 
     def __move_roque(self, _id):
-        if _id == 'BL':
-            self.tabuleiro[7] = self.tabuleiro[7][:3] + [self.empty, 't2', 're', self.empty, self.empty]
-        elif _id == 'BC':
-            self.tabuleiro[7] = [self.empty, 're', 't1', self.empty] + self.tabuleiro[7][4:]
-        elif _id == 'PL':
-            self.tabuleiro[0] = self.tabuleiro[0][:3] + [self.empty, 'T2', 'RE', self.empty, self.empty]
-        elif _id == 'PC':
-            self.tabuleiro[0] = [self.empty, 'RE', 'T1', self.empty] + self.tabuleiro[0][4:]
+        x = 7 if _id[0] == 'B' else 0
+        para = 1 if _id[1] == 'L' else -1
+        torre = 7 if _id[1] == 'L' else 0
+
+        self.casa([x, 3]).move(x, 3 + 2 * para)
+        self.casa([x, torre]).move(x, 3 + para)
 
     def __comer_passant(self, origem, destino):
         comer = [origem[0], destino[1]]
-        self.set_casa(destino, self.casa(origem))
-        self.set_casa(comer, self.empty)
-        self.set_casa(origem, self.empty)
+        peca = self.casa(origem)
+        outra = self.casa(comer)
+        peca.move(*destino)
+        self.tabuleiro.remove(outra)
 
-    @dispatch(str)
-    def __is_check(self, turn):
-        turn = turn.upper()
-        other = 'RE' if turn == 'B' else 're'
+    def __is_check(self, _for):
         dic = {
-            'P': self.__pretas,
-            'B': self.__brancas,
+            'P': self.pretas,
+            'B': self.brancas,
         }
-        king_pos = self.encontra(other)
-        for peca in dic[turn]():
-            if self.__validate_move(self.encontra(peca), king_pos, peca, self.vez, comer=True):
+        king = self.rei(self.inv_cor(_for))
+        for peca in dic[_for]:
+            if self.__validate_move(peca.pos, king.pos, _for):
                 return True
         return False
 
-    @dispatch()
-    def __is_check(self):
-        if self.__is_check('P'):
-            return 'P'
-        elif self.__is_check('B'):
-            return 'B'
-        return False
-
-    @dispatch(str)
-    def __is_mate(self, turn):
-        turn = turn.upper()
-        if not self.__is_check(turn):
+    def __is_mate(self, _for):
+        if not self.__is_check(_for):
             return False
-        other = 'RE' if turn == 'B' else 're'
-        king_pos = self.encontra(other)
-        possibs = Pecas.Rei(*king_pos).possiveis()
-        for poss in possibs:
-            if self.casa(list(poss)) == self.empty:
-                new = deepcopy(self.tabuleiro)
-                branch = Xadrez(configuracao_inicial=new)
-                branch.troca_casas(king_pos, poss)
-                if not branch.__is_check(turn):
-                    return False
+        dic = {
+            'P': self.pretas,
+            'B': self.brancas,
+        }
+
+        on_check = self.inv_cor(_for)
+        deffen = dic[on_check]
+        for protect in deffen:
+            for move in protect.possiveis(True):
+                if self.__validate_move(protect.pos, move, on_check):
+                    new = Xadrez(self.copy())
+                    new.vez = on_check
+                    new.__move(protect.pos, move)
+                    if not new.__is_check(_for):
+                        return False
+                    del new
         return True
 
-    @dispatch()
-    def __is_mate(self):
-        if self.__is_mate('P'):
-            return 'P'
-        elif self.__is_mate('B'):
-            return 'B'
-        return False
-
     def __validate_passant(self, origem, destino):
-        comer = [destino[0], origem[1]]
-        cor1 = self.__cor(origem[::-1])
-        cor2 = self.__cor(comer[::-1])
+        comer = [origem[0], destino[1]]
+        cor1 = self.cor(origem)
+        cor2 = self.cor(comer)
         falsy = [
-            not self.casa(origem[::-1]).lower().startswith('p'),
-            not self.casa(comer[::-1]).lower().startswith('p'),
+            not isinstance(self.casa(origem), Peao),
+            not isinstance(self.casa(comer), Peao),
             cor1 == cor2,
             None in (cor1, cor2),
-            self.casa(destino[::-1]) != self.empty,
-            self.casa(comer[::-1]) not in self.__passant
+            self.casa(destino) is not None,
+            self.casa(comer) not in self.__passant
         ]
         if any(falsy):
             return False
         return 'passant'
 
+    def __validate_not_check_move(self, origem, destino):
+        new = Xadrez(list(self.copy()))
+        turn = new.cor(origem)
+        new.vez = turn
+        new.__move(origem, destino)
+        return not new.__is_check(self.inv_cor(turn))
+
     # Pygame
 
-    def blit(self, force=False):
+    def blit(self, force=True):
         cor = 255
         for x in range(8):
             for y in range(8):
-                if self.__previous[x][y] != self.tabuleiro[x][y] or force:
+                if force:
                     self.__draw_rect(x, y, (cor, cor, cor))
                 cor = 400 - cor
             cor = 400 - cor
 
-        for y, line in enumerate(self.tabuleiro):
-            for x, peca in enumerate(line):
-                if peca != self.empty:
-                    img = self.imgs[peca.isupper()][peca.lower().rstrip('+12345678')]
-                    self.screen.blit(img, (x*100, y*100))
-        self.__previous = deepcopy(self.tabuleiro)
+        for peca in self.tabuleiro:
+            img = self.imgs[peca.cor][peca.__class__.__name__]
+            self.screen.blit(img, (peca.y * 100, peca.x * 100))
+
+    def __text(self, text, color=(0, 0, 0)):
+        img = pg.font.SysFont('Agency FB', 95, True).render(text, True, color)
+        img_w, img_h = img.get_size()
+        self.screen.blit(img, ((self.screen_size - img_w) // 2, (self.screen_size - img_h) // 2))
+        pg.display.update()
+        self.__wait_for_click()
+        self.blit()
 
     def __mark(self, x, y):
         if self.__marked:
-            self.blit(True)
-        if self.casa(y, x) == self.empty:
+            self.blit()
+        peca = self.casa([x, y])
+        if peca is None:
             return
-        self.__marked = [[y, x], []]
-        self.__draw_rect(x, y, (100, 150, 250))
+        self.__marked = [[x, y], []]
+        self.__draw_rect(y, x, (100, 150, 250))
 
-        classe = {
-            'b': Pecas.Bispo,
-            't': Pecas.Torre,
-            'c': Pecas.Cavalo,
-            're': Pecas.Rei,
-            'ra': Pecas.Rainha,
-        }
-
-        _peca = self.casa(y, x)
-        branca = _peca.islower()
-        peca = _peca.lower().rstrip('+12345678')
-        if peca == 'p':
-            obj = Pecas.Peao(y, x, (0.5 - int(branca)) * 2)
-        elif peca == self.empty:
-            return
-        else:
-            obj = classe[peca](y, x)
-        for y1, x1 in obj.possiveis(True):
-            comer = self.casa(y1, x1) != self.empty
-            cor_da_peca = 'B' if branca else 'P'
-            if (x1 != x and peca == 'p' and (not comer) and y not in (3, 4)) or (x1 == x and peca == 'p' and comer):
+        for x1, y1 in peca.possiveis(True):
+            comer = self.casa([x1, y1]) is not None
+            if (y1 != y and isinstance(peca, Peao) and (not comer) and x not in (3, 4)) \
+                    or (y1 == y and isinstance(peca, Peao) and comer):
                 continue
-            elif peca == 'p' and x1 != x and y in (3, 4) and not comer:
+            elif isinstance(peca, Peao) and y1 != y and x in (3, 4) and not comer:
                 val = self.__validate_passant([x, y], [x1, y1])
                 comer = True
             else:
-                val = self.__validate_move((x, y), (x1, y1), _peca, cor_da_peca, comer)
+                val = self.__validate_move((x, y), (x1, y1), self.cor([x, y]))
+                val = val and self.__validate_not_check_move((x, y), (x1, y1))
             if val:
-                if cor_da_peca != self.vez:
+                if peca.cor != self.vez:
                     cor = (250, 250, 100)  # Amarelo
                 elif val == 'roque':
                     cor = (200, 100, 250)  # Roxo
@@ -454,7 +335,7 @@ class Xadrez(Tabuleiro):
                     cor = (250, 100, 150)  # Vermelho
                 else:
                     cor = (100, 250, 150)  # Verde
-                self.__draw_rect(x1, y1, cor)
+                self.__draw_rect(y1, x1, cor)
                 self.__marked[1].append((x1, y1))
 
     def __draw_rect(self, x, y, color):
@@ -473,9 +354,9 @@ class Xadrez(Tabuleiro):
         self.screen.fill((255, 255, 255))
         pg.draw.rect(self.screen, (0, 0, 0), ((0, self.screen_size // 2 - 1), (self.screen_size, 2)))
         pg.draw.rect(self.screen, (0, 0, 0), ((self.screen_size // 2 - 1, 0), (2, self.screen_size)))
-        possibs = ['ra', 'c', 'b', 't']
+        possibs = ['Rainha', 'Cavalo', 'Bispo', 'Torre']
         for i, peca in enumerate(possibs):
-            img = pg.transform.scale(self.imgs[color == 'P'][peca], (self.screen_size // 8, self.screen_size // 8))
+            img = pg.transform.scale(self.imgs[color][peca], (self.screen_size // 8, self.screen_size // 8))
             self.screen.blit(img, (
                 (i // 2) * (self.screen_size // 2) + 3 * self.screen_size // 16,
                 (i % 2) * (self.screen_size // 2) + 3 * self.screen_size // 16))
@@ -491,32 +372,39 @@ class Xadrez(Tabuleiro):
             if evt.type == pg.QUIT:
                 self.running = False
             elif evt.type == pg.MOUSEBUTTONDOWN:
-                x = evt.pos[0] // 100
-                y = evt.pos[1] // 100
+                w = evt.pos[0] // 100
+                h = evt.pos[1] // 100
                 if self.__marked:
-                    if (x, y) in self.__marked[1]:
-                        ok = self.__move(self.__marked[0], [y, x])
+                    if (h, w) in self.__marked[1]:
+                        ok = self.__move(self.__marked[0], [h, w])
                         if ok:
-                            self.blit(True)
+                            self.blit()
                         self.__marked = None
-                    elif self.casa(y, x) != self.empty:
-                        self.__mark(x, y)
+                    elif self.casa([h, w]) is not None:
+                        self.__mark(h, w)
                     else:
-                        self.blit(True)
+                        self.blit()
                         self.__marked = None
                 else:
-                    self.__mark(x, y)
+                    self.__mark(h, w)
 
+    def loop(self):
+        self.screen: pg.Surface = pg.display.set_mode((self.screen_size, self.screen_size))
+        self.imgs = {
+            'P': {name: pg.transform.scale(pg.image.load(f'./assets/Preto/{name}.png'), (100, 100))
+                  for name in ['Peao', 'Bispo', 'Torre', 'Cavalo', 'Rei', 'Rainha']},
+            'B': {name: pg.transform.scale(pg.image.load(f'./assets/Branco/{name}.png'), (100, 100))
+                  for name in ['Peao', 'Bispo', 'Torre', 'Cavalo', 'Rei', 'Rainha']}
+        }
+        clock = Clock()
 
-# TODO:
-# Mostar apenas movimentos que não colocam o Rei em cheque
-# Mate
+        self.blit()
+        while self.running:
+            self.blit(False)
+            self.event_listener()
+            pg.display.update()
+            clock.tick(100)
 
 
 if __name__ == '__main__':
-    this = Xadrez('-')
-    while this.running:
-        this.event_listener()
-        this.blit()
-        pg.display.update()
-        sleep(0.1)
+    Xadrez().loop()
