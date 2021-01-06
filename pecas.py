@@ -61,9 +61,16 @@ class Cavalo(Peca):
 class Rei(Peca):
     def possiveis(self, comer=False):
         res = [(self.x + x, self.y + y) for x in (-1, 0, 1) for y in (-1, 0, 1) if (x, y) != (0, 0)]
-        return [(x, y) for x, y in res if 0 <= x < 8 and 0 <= y < 8] + [(self.x, self.y - 2), (self.x, self.y + 2)]
+        if not self.moved:
+            res += [(self.x, self.y - 2), (self.x, self.y + 2)]
+        return [(x, y) for x, y in res if 0 <= x < 8 and 0 <= y < 8]
 
 
 class Rainha(Peca):
     def possiveis(self, comer=False):
         return Torre(self.x, self.y, self.cor).possiveis() + Bispo(self.x, self.y, self.cor).possiveis()
+
+
+class Supreme(Peca):
+    def possiveis(self, comer=False):
+        return Rainha(self.x, self.y, self.cor).possiveis() + Cavalo(self.x, self.y, self.cor).possiveis()
