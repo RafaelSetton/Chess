@@ -23,7 +23,10 @@ class Xadrez:
 
         self.screen_height = 800
         self.screen_width = int(self.screen_height * 1.5)
-        self.screen: pg.Surface = pg.Surface((100, 100))
+        self.screen = None
+        self.mouse_pos = (-1, -1)
+        self.scroll = 0
+        self.move_show_count = 10
         self.imgs = None
 
     def __repr__(self):
@@ -48,7 +51,7 @@ class Xadrez:
     def copy(self):
         return [peca.__copy__() for peca in self.tabuleiro]
 
-    # Getters
+    # Helper Functions
 
     def cor(self, casa):
         peca = self.casa(casa)
@@ -102,7 +105,8 @@ class Xadrez:
         try:
             r1, r2 = list(filter(Rei.__instancecheck__, self.tabuleiro))
         except ValueError:
-            breakpoint()
+            rei = list(filter(Rei.__instancecheck__, self.tabuleiro))[0]
+            return rei if rei.cor == cor else None
         else:
             return r1 if r1.cor == cor else r2
 
@@ -110,7 +114,94 @@ class Xadrez:
     def inv_cor(cor):
         return 'P' if cor == 'B' else 'B'
 
-    # Outros
+    def scrolled_moves(self, quantity):
+        if self.scroll == 0:
+            wm = self.__moves['B'][-quantity:]
+            bm = self.__moves['P'][-quantity:] if len(self.__moves['B']) == len(self.__moves['P']) else \
+                self.__moves['P'][-quantity+1:] + [' ']
+        else:
+            wm = self.__moves['B'][-quantity + self.scroll:self.scroll]
+            if len(self.__moves['B']) == len(self.__moves['P']):
+                bm = self.__moves['P'][-quantity + self.scroll:self.scroll]
+            elif self.scroll == -1:
+                bm = self.__moves['P'][-quantity:]
+            else:
+                bm = self.__moves['P'][-quantity+1 + self.scroll:self.scroll + 1]
+        return wm, bm
+
+    @staticmethod
+    def __intercalate(arr1, arr2):
+        return sum(zip(arr1, arr2), tuple())
+
+    @staticmethod
+    def __font(size):
+        return pg.font.SysFont('Calibri', size)
+
+    def __translate(self, origem, destino):
+        peca = self.casa(origem)
+        outra = self.casa(destino)
+        comer = bool(outra)
+        letra = {
+            'Peao': '',
+            'Bispo': 'B',
+            'Torre': 'R',
+            'Cavalo': 'N',
+            'Rainha': 'Q',
+            'Rei': 'K'
+        }
+        final = letra[peca.__class__.__name__]
+        if comer:
+            final += 'x'
+        final += f"{'abcdefgh'[destino[1]]}{8 - destino[0]}"
+        return final
+
+    def __is_check(self, _for):
+        dic = {
+            'P': self.pretas,
+            'B': self.brancas,
+        }
+        king = self.rei(self.inv_cor(_for))
+        for peca in dic[_for]:
+            if self.__validate_move(peca.pos, king.pos, _for):
+                return True
+        return False
+
+    def __checker(self, _for):
+        """
+        :param _for: Turn to check for
+        :return:
+            0: None
+            1: Check
+            2: Mate
+            3: Drowned King
+        """
+        dic = {
+            'P': self.pretas,
+            'B': self.brancas,
+        }
+
+        on_check = self.inv_cor(_for)
+        deffen = dic[on_check]
+        drowned = True
+        check = self.__is_check(_for)
+        for protect in deffen:
+            for move in protect.possiveis(True):
+                if self.__validate_move(protect.pos, move, on_check):
+                    new = Xadrez(self.copy())
+                    new.vez = on_check
+                    new.__move(protect.pos, move)
+                    if not new.__is_check(_for):
+                        drowned = False
+                    del new
+        if check:
+            if drowned:
+                return 2
+            return 1
+        if drowned:
+            return 3
+        return 0
+
+    # Validations
 
     def __validate_move(self, origem, destino, vez):
         peca = self.casa(origem)
@@ -185,23 +276,30 @@ class Xadrez:
 
         return valido
 
-    def __translate(self, origem, destino):
-        peca = self.casa(origem)
-        outra = self.casa(destino)
-        comer = bool(outra)
-        letra = {
-            'Peao': '',
-            'Bispo': 'B',
-            'Torre': 'R',
-            'Cavalo': 'N',
-            'Rainha': 'Q',
-            'Rei': 'K'
-        }
-        final = letra[peca.__class__.__name__]
-        if comer:
-            final += 'x'
-        final += f"{'abcdefgh'[destino[1]]}{8 - destino[0]}"
-        return final
+    def __validate_passant(self, origem, destino):
+        comer = [origem[0], destino[1]]
+        cor1 = self.cor(origem)
+        cor2 = self.cor(comer)
+        falsy = [
+            not isinstance(self.casa(origem), Peao),
+            not isinstance(self.casa(comer), Peao),
+            cor1 == cor2,
+            None in (cor1, cor2),
+            self.casa(destino) is not None,
+            self.casa(comer) not in self.__passant
+        ]
+        if any(falsy):
+            return False
+        return 'passant'
+
+    def __validate_not_check_move(self, origem, destino):
+        new = Xadrez(list(self.copy()))
+        turn = new.cor(origem)
+        new.vez = turn
+        new.__move(origem, destino)
+        return not new.__is_check(self.inv_cor(turn))
+
+    # Moving
 
     def __move(self, origem, destino):
         notation = self.__translate(origem, destino)
@@ -238,27 +336,37 @@ class Xadrez:
         # Promotion
         if isinstance(peca, Peao) and destino[0] in (0, 7):
             if self.screen:
-                new = self.__promote(self.cor(origem))
+                new = self.__promote(self.cor(destino))
                 classe = {
                     'Rainha': Rainha,
                     'Bispo': Bispo,
                     'Cavalo': Cavalo,
                     'Torre': Torre,
                 }
-                self.tabuleiro.append(classe[new](*destino, self.cor(origem)))
+                self.tabuleiro.append(classe[new](*destino, self.cor(destino)))
+                self.tabuleiro.remove(peca)
+                self.blit()
+                nota = {'Rainha': 'Q', 'Bispo': 'B', 'Torre': 'R', 'Cavalo': 'N'}
+                notation += f'={nota[new]}'
             else:
                 self.tabuleiro.append(Supreme(*destino, self.cor(origem)))
-            self.tabuleiro.remove(peca)
+                self.tabuleiro.remove(peca)
 
         # Check and Mate
         if self.screen:
-            if self.__is_mate(self.vez):
+            state = self.__checker(self.vez)
+            if state:
+                self.blit()
+                pg.display.update()
+            if state == 2:
                 self.__text("Cheque Mate", (255, 0, 0))
                 notation += '++'
                 self.game = False
-            elif self.__is_check(self.vez):
+            elif state == 1:
                 self.__text('Cheque', (250, 200, 0))
                 notation += '+'
+            elif state == 3:
+                self.__text("Rei Afogado")
             self.__moves[self.vez].append(notation)
 
         self.vez = self.inv_cor(self.vez)
@@ -284,138 +392,67 @@ class Xadrez:
         comer = [origem[0], destino[1]]
         peca = self.casa(origem)
         outra = self.casa(comer)
+        self.__comidas[self.cor(origem)].append(outra)
         peca.move(*destino)
         self.tabuleiro.remove(outra)
 
-    def __is_check(self, _for):
-        dic = {
-            'P': self.pretas,
-            'B': self.brancas,
-        }
-        king = self.rei(self.inv_cor(_for))
-        for peca in dic[_for]:
-            if self.__validate_move(peca.pos, king.pos, _for):
-                return True
-        return False
-
-    def __is_mate(self, _for):
-        if not self.__is_check(_for):
-            return False
-        dic = {
-            'P': self.pretas,
-            'B': self.brancas,
-        }
-
-        on_check = self.inv_cor(_for)
-        deffen = dic[on_check]
-        for protect in deffen:
-            for move in protect.possiveis(True):
-                if self.__validate_move(protect.pos, move, on_check):
-                    new = Xadrez(self.copy())
-                    new.vez = on_check
-                    new.__move(protect.pos, move)
-                    if not new.__is_check(_for):
-                        return False
-                    del new
-        return True
-
-    def __validate_passant(self, origem, destino):
-        comer = [origem[0], destino[1]]
-        cor1 = self.cor(origem)
-        cor2 = self.cor(comer)
-        falsy = [
-            not isinstance(self.casa(origem), Peao),
-            not isinstance(self.casa(comer), Peao),
-            cor1 == cor2,
-            None in (cor1, cor2),
-            self.casa(destino) is not None,
-            self.casa(comer) not in self.__passant
-        ]
-        if any(falsy):
-            return False
-        return 'passant'
-
-    def __validate_not_check_move(self, origem, destino):
-        new = Xadrez(list(self.copy()))
-        turn = new.cor(origem)
-        new.vez = turn
-        new.__move(origem, destino)
-        return not new.__is_check(self.inv_cor(turn))
-
     # Pygame
 
-    @staticmethod
-    def __intercalate(arr1, arr2):
-        return sum(zip(arr1, arr2), tuple())
+    def __moves_box(self, width, height):
+        rows = self.move_show_count + 1
+        surface: pg.Surface = pg.Surface((width, height))
+        pg.draw.rect(surface, (0, 0, 0), ((0, 0), (width, height)))  # Black Outline
+        pg.draw.rect(surface, (127, 127, 127), ((2, 2), (width // 2 - 3, height // rows - 3)))  # Top Left
+        pg.draw.rect(surface, (127, 127, 127), ((width // 2 + 1, 2), (width // 2 - 3, height // rows - 3)))  # Top Right
+        pg.draw.rect(surface, (127, 127, 127),
+                     ((2, height // rows + 1), (width // 2 - 3, height * (rows - 1) // rows - 3)))  # Bottom Left
+        pg.draw.rect(surface, (127, 127, 127),
+                     ((width // 2 + 1, height // rows + 1),
+                      (width // 2 - 3, height * (rows - 1) // rows - 3)))  # Bottom Right
 
-    @staticmethod
-    def __font(size):
-        return pg.font.SysFont('Calibri', size)
+        txt_brancas = self.__font(30).render("Brancas", True, (255, 255, 255))
+        txt_pretas = self.__font(30).render("Pretas", True, (0, 0, 0))
+        surface.blit(txt_brancas,
+                     ((width / 2 - txt_brancas.get_width()) // 2, (height / rows - txt_brancas.get_height()) // 2))
+        surface.blit(txt_pretas,
+                     ((width * 3 / 2 - txt_brancas.get_width()) // 2, (height / rows - txt_brancas.get_height()) // 2))
 
-    def __blit_moves(self):
-        pg.draw.rect(self.screen, (0, 0, 0), ((int(self.screen_height * 21 / 20), int(self.screen_height * 9 / 80)),
-                                              (self.screen_height // 4, self.screen_height // 2)))  # Black Outline
-        pg.draw.rect(self.screen, (127, 127, 127),
-                     ((int(self.screen_height * 21 / 20) + 2, int(self.screen_height * 9 / 80) + 2),
-                      (self.screen_height // 8 - 4, self.screen_height // 16 - 4)))  # Top Left
-        pg.draw.rect(self.screen, (127, 127, 127),
-                     ((int(self.screen_height * 47 / 40) + 2, int(self.screen_height * 9 / 80) + 2),
-                      (self.screen_height // 8 - 4, self.screen_height // 16 - 4)))  # Top Right
-        pg.draw.rect(self.screen, (127, 127, 127),
-                     ((int(self.screen_height * 21 / 20) + 2, int(self.screen_height * 7 / 40) + 2),
-                      (self.screen_height // 8 - 4, self.screen_height * 7 // 16 - 4)))  # Bottom Left
-        pg.draw.rect(self.screen, (127, 127, 127),
-                     ((int(self.screen_height * 47 / 40) + 2, int(self.screen_height * 7 / 40) + 2),
-                      (self.screen_height // 8 - 4, self.screen_height * 7 // 16 - 4)))  # Bottom Right
-        self.screen.blit(self.__font(30).render("Brancas", True, (255, 255, 255)),
-                         (int(self.screen_height * 21 / 20) + 4, int(self.screen_height * 9 / 80) + 10))
-        self.screen.blit(self.__font(30).render("Pretas", True, (0, 0, 0)),
-                         (int(self.screen_height * 47 / 40) + 6, int(self.screen_height * 9 / 80) + 10))
-
-        wm = self.__moves['B'][-7:]
-        bm = self.__moves['P'][-7:] if len(self.__moves['B']) == len(self.__moves['P']) else \
-            self.__moves['P'][-6:] + [' ']
-        moves = self.__intercalate(wm, bm)
+        moves = self.__intercalate(*self.scrolled_moves(rows-1))
         for i, move in enumerate(moves):
             #  Terminar Design;
             cor = (255 * (1 - i % 2),) * 3
-            w = self.screen_height * 17 / 16 + self.screen_height * (i % 2) / 8
-            h = self.screen_height * 3 / 16 + self.screen_height * (i // 2) / 16
+            w = 2 if i % 2 == 0 else width // 2 + 1
+            h = 2 + height * (i // 2 + 1) // rows
             img = self.__font(35).render(move, True, cor)
-            self.screen.blit(img, (int(w), int(h)))
+            surface.blit(img, (w, h))
 
-    def __blit_eaten(self):
-        pg.draw.rect(self.screen, (0, 0, 0), ((self.screen_height * 21 // 20, self.screen_height * 5 // 8),
-                                              (self.screen_height // 4, self.screen_height * 5 // 24)))  # Black Outline
-        pg.draw.rect(self.screen, (127, 127, 127),
-                     ((self.screen_height * 21 // 20 + 2, self.screen_height * 5 // 8 + 2),
-                      (self.screen_height // 8 - 4, self.screen_height * 5 // 24 - 4)))  # Left
-        pg.draw.rect(self.screen, (127, 127, 127),
-                     ((self.screen_height * 47 // 40 + 2, self.screen_height * 5 // 8 + 2),
-                      (self.screen_height // 8 - 4, self.screen_height * 5 // 24 - 4)))  # Right
+        return surface
+
+    def __eaten_box(self, size, grid_size=4):
+        surface: pg.Surface = pg.Surface((size, size))
+        pg.draw.rect(surface, (0, 0, 0), ((0, 0), (size - 4, size - 4)))  # Black Outline
+        pg.draw.rect(surface, (127, 127, 127), ((2, 2), (size // 2 - 3, size - 4)))  # Left
+        pg.draw.rect(surface, (127, 127, 127), ((size // 2 + 1, 2), (size // 2 - 3, size - 4)))  # Right
         classes = ['Rei', 'Rainha', 'Torre', 'Cavalo', 'Bispo', 'Peao']
-        img_size = self.screen_height // 24
+        img_size = size // (grid_size * 2)
         for i, peca in enumerate(sorted(self.__comidas['P'], key=lambda p: classes.index(p.__class__.__name__))):
-            rel_w = i % 3
-            rel_h = i // 3
-            img = pg.transform.scale(self.imgs['B'][peca.__class__.__name__],
-                                     (img_size, img_size))
-            self.screen.blit(img, (self.screen_height * 21 // 20 + img_size * rel_w + 2,
-                                   self.screen_height * 5 // 8 + img_size * rel_h + 1))
+            rel_w = i % grid_size
+            rel_h = i // grid_size
+            img = pg.transform.scale(self.imgs['B'][peca.__class__.__name__], (img_size, img_size))
+            surface.blit(img, (img_size * rel_w + 2, img_size * rel_h + 1))
         for i, peca in enumerate(sorted(self.__comidas['B'], key=lambda p: classes.index(p.__class__.__name__))):
             rel_w = i % 3
             rel_h = i // 3
-            img = pg.transform.scale(self.imgs['P'][peca.__class__.__name__],
-                                     (img_size, img_size))
-            self.screen.blit(img, (self.screen_height * 47 // 40 + img_size * rel_w + 2,
-                                   self.screen_height * 5 // 8 + img_size * rel_h + 1))
+            img = pg.transform.scale(self.imgs['P'][peca.__class__.__name__], (img_size, img_size))
+            surface.blit(img, (size // 2 + img_size * rel_w + 3, img_size * rel_h + 1))
+        return surface
 
     def blit(self, force=True):
         cor = 255
         for x in range(8):
             for y in range(8):
                 if force:
-                    self.__draw_rect(x, y, (cor, cor, cor))
+                    self.__draw_rect(self.screen, x, y, (cor, cor, cor))
                 cor = 400 - cor
             cor = 400 - cor
 
@@ -425,8 +462,10 @@ class Xadrez:
 
         pg.draw.rect(self.screen, (200, 200, 200),
                      ((self.screen_height, 0), (self.screen_width - self.screen_height, self.screen_height)))
-        self.__blit_moves()
-        self.__blit_eaten()
+        self.screen.blit(self.__moves_box(self.screen_height // 3, self.screen_height // 2),
+                         (self.screen_height * 8.1 // 8, self.screen_height // 16))
+        self.screen.blit(self.__eaten_box(self.screen_height // 3, 3),
+                         (self.screen_height * 8.1 // 8, self.screen_height * 10 // 16))
 
     def __text(self, text, color=(0, 0, 0)):
         img = self.__font(95).render(text, True, color)
@@ -444,7 +483,7 @@ class Xadrez:
         if peca is None:
             return
         self.__marked = [[x, y], []]
-        self.__draw_rect(y, x, (100, 150, 250))
+        self.__draw_rect(self.screen, y, x, (100, 150, 250))
 
         for x1, y1 in peca.possiveis(True):
             comer = self.casa([x1, y1]) is not None
@@ -467,12 +506,13 @@ class Xadrez:
                     cor = (250, 100, 150)  # Vermelho
                 else:
                     cor = (100, 250, 150)  # Verde
-                self.__draw_rect(y1, x1, cor)
+                self.__draw_rect(self.screen, y1, x1, cor)
                 self.__marked[1].append((x1, y1))
 
-    def __draw_rect(self, x, y, color):
-        pg.draw.rect(self.screen, (0, 0, 0), ((x * 100, y * 100), (100, 100)))
-        pg.draw.rect(self.screen, color, ((x * 100 + 1, y * 100 + 1), (98, 98)))
+    @staticmethod
+    def __draw_rect(screen, x, y, color):
+        pg.draw.rect(screen, (0, 0, 0), ((x * 100, y * 100), (100, 100)))
+        pg.draw.rect(screen, color, ((x * 100 + 1, y * 100 + 1), (98, 98)))
 
     def __wait_for_click(self):
         while self.running:
@@ -486,8 +526,8 @@ class Xadrez:
 
     def __promote(self, color):
         self.screen.fill((255, 255, 255))
-        pg.draw.rect(self.screen, (0, 0, 0), ((0, self.screen_width // 2 - 1), (self.screen_height, 2)))
         pg.draw.rect(self.screen, (0, 0, 0), ((self.screen_width // 2 - 1, 0), (2, self.screen_height)))
+        pg.draw.rect(self.screen, (0, 0, 0), ((0, self.screen_height // 2 - 1), (self.screen_width, 2)))
         possibs = ['Rainha', 'Cavalo', 'Bispo', 'Torre']
         for i, peca in enumerate(possibs):
             img = pg.transform.scale(self.imgs[color][peca], (self.screen_width // 8, self.screen_height // 8))
@@ -513,13 +553,14 @@ class Xadrez:
                 return
 
     def event_listener(self):
+        scrolled = False
         for evt in pg.event.get():
             if evt.type == pg.QUIT:
                 self.running = False
                 self.game = False
             elif evt.type == pg.MOUSEBUTTONDOWN:
-                w = evt.pos[0] // 100
-                h = evt.pos[1] // 100
+                w = self.mouse_pos[0] // 100
+                h = self.mouse_pos[1] // 100
                 if self.__marked:
                     if (h, w) in self.__marked[1]:
                         ok = self.__move(self.__marked[0], [h, w])
@@ -533,6 +574,11 @@ class Xadrez:
                         self.__marked = None
                 else:
                     self.__mark(h, w)
+            elif evt.type == pg.MOUSEMOTION:
+                self.mouse_pos = evt.pos
+            elif evt.type == pg.MOUSEWHEEL and not scrolled:
+                self.scroll = max(min(self.scroll - evt.y, 0), min(-len(self.__moves['B']) + self.move_show_count, 0))
+                scrolled = True
 
     def loop(self):
         self.screen: pg.Surface = pg.display.set_mode((self.screen_width, self.screen_height))
